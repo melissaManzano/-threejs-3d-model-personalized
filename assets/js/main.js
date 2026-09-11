@@ -9,10 +9,16 @@ const scene = new THREE.Scene();
 
 scene.background = new THREE.Color(0x07111f);
 
+// La niebla oculta el borde del piso/grid cuando se recentra bajo el
+
+// personaje (ver GROUND_*) y añade profundidad a la escena.
+
+scene.fog = new THREE.FogExp2(0x07111f, 0.045);
+
 
 const camera = new THREE.PerspectiveCamera(
 
-  50,
+  45,
 
   window.innerWidth / window.innerHeight,
 
@@ -35,12 +41,30 @@ renderer.shadowMap.enabled = true;
 
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+renderer.toneMappingExposure = 1.1;
+
 document.getElementById('scene-container').appendChild(renderer.domElement);
 
 
 const controls = new OrbitControls(camera, renderer.domElement);
 
 controls.enableDamping = true;
+
+controls.dampingFactor = 0.08;
+
+controls.enablePan = false; // la cámara sigue al personaje; el paneo se desactiva para no pelear con ese seguimiento
+
+controls.minDistance = 3;
+
+controls.maxDistance = 12; // evita alejarse lo suficiente para ver el borde del piso recentrado
+
+controls.minPolarAngle = 0.2; // evita ver la escena desde arriba en picada
+
+controls.maxPolarAngle = Math.PI / 2 - 0.05; // evita que la cámara baje del nivel del piso
 
 controls.target.set(0, 1, 0);
 
@@ -416,12 +440,19 @@ function animate() {
 renderer.setAnimationLoop(animate);
 
 
-window.addEventListener('resize', () => {
+function handleResize() {
 
   camera.aspect = window.innerWidth / window.innerHeight;
 
   camera.updateProjectionMatrix();
 
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
   renderer.setSize(window.innerWidth, window.innerHeight);
 
-});
+}
+
+
+window.addEventListener('resize', handleResize);
+
+window.addEventListener('orientationchange', handleResize);
