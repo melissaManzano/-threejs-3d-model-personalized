@@ -69,20 +69,64 @@ controls.maxPolarAngle = Math.PI / 2 - 0.05; // evita que la cámara baje del ni
 controls.target.set(0, 1, 0);
 
 
-const hemiLight = new THREE.HemisphereLight(0xffffff, 0x223344, 1.8);
+// Luz de cielo/rebote: ilumina de forma pareja como luz ambiental "natural".
+
+const hemiLight = new THREE.HemisphereLight(0xbfd6ff, 0x2b3a2a, 1.1);
 
 scene.add(hemiLight);
 
 
-const mainLight = new THREE.DirectionalLight(0xffffff, 3);
+// Luz principal (sol): la que proyecta las sombras. Como el personaje avanza
 
-mainLight.position.set(5, 10, 6);
+// de forma continua e ilimitada (ver GROUND_* y el seguimiento de cámara),
+
+// esta luz y su cámara de sombras deben seguirlo en animate(); si se dejara
+
+// fija en el origen, al alejarse el personaje saldría del frustum y las
+
+// sombras desaparecerían.
+
+const LIGHT_OFFSET = new THREE.Vector3(5, 10, 6);
+
+
+const mainLight = new THREE.DirectionalLight(0xfff2df, 3.4);
+
+mainLight.position.copy(LIGHT_OFFSET);
 
 mainLight.castShadow = true;
 
 mainLight.shadow.mapSize.set(2048, 2048);
 
+mainLight.shadow.camera.near = 1;
+
+mainLight.shadow.camera.far = 30;
+
+mainLight.shadow.camera.left = -8;
+
+mainLight.shadow.camera.right = 8;
+
+mainLight.shadow.camera.top = 8;
+
+mainLight.shadow.camera.bottom = -8;
+
+mainLight.shadow.bias = -0.0004;
+
+mainLight.shadow.normalBias = 0.025;
+
 scene.add(mainLight);
+
+scene.add(mainLight.target);
+
+
+// Luz de relleno fría (rebote del cielo) sin sombra, para que el lado
+
+// opuesto al sol no quede completamente negro.
+
+const fillLight = new THREE.DirectionalLight(0x9fc4ff, 0.7);
+
+fillLight.position.set(-6, 4, -4);
+
+scene.add(fillLight);
 
 
 const GROUND_SIZE = 20;
@@ -426,6 +470,23 @@ function animate() {
     controls.target.set(model.position.x, 1, model.position.z);
 
     prevModelPosition.copy(model.position);
+
+
+    // La luz/sombra principal también sigue al personaje, manteniendo el
+
+    // mismo ángulo de incidencia (ver comentario junto a LIGHT_OFFSET).
+
+    mainLight.position.set(
+
+      model.position.x + LIGHT_OFFSET.x,
+
+      LIGHT_OFFSET.y,
+
+      model.position.z + LIGHT_OFFSET.z
+
+    );
+
+    mainLight.target.position.set(model.position.x, 0, model.position.z);
 
   }
 
