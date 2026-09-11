@@ -7,13 +7,17 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
 const scene = new THREE.Scene();
 
-scene.background = new THREE.Color(0x07111f);
+// Mismo tono que la base del degradado del cielo (ver "sky" más abajo), para
 
-// La niebla oculta el borde del piso/grid cuando se recentra bajo el
+// que no haya un salto de color si el cielo aún no cargó o en los bordes.
 
-// personaje (ver GROUND_*) y añade profundidad a la escena.
+scene.background = new THREE.Color(0x3b4a63);
 
-scene.fog = new THREE.FogExp2(0x07111f, 0.045);
+// La niebla disimula el borde del terreno cargado (ver TILE_*), funde las
+
+// colinas lejanas con el cielo y añade profundidad.
+
+scene.fog = new THREE.FogExp2(0x3b4a63, 0.035);
 
 
 const camera = new THREE.PerspectiveCamera(
@@ -60,7 +64,7 @@ controls.enablePan = false; // la cámara sigue al personaje; el paneo se desact
 
 controls.minDistance = 3;
 
-controls.maxDistance = 12; // evita alejarse lo suficiente para ver el borde del piso recentrado
+controls.maxDistance = 12; // evita alejarse lo suficiente para ver el borde del terreno cargado (ver TILE_*)
 
 controls.minPolarAngle = 0.2; // evita ver la escena desde arriba en picada
 
@@ -69,16 +73,68 @@ controls.maxPolarAngle = Math.PI / 2 - 0.05; // evita que la cámara baje del ni
 controls.target.set(0, 1, 0);
 
 
+// Cielo de atardecer: una esfera con degradado, hija de la cámara, para que
+
+// siempre rodee la escena sin importar qué tan lejos camine el personaje
+
+// (el mismo problema que resolvimos con la luz principal, aplicado al cielo).
+
+function createSkyTexture() {
+
+  const canvas = document.createElement('canvas');
+
+  canvas.width = 2;
+
+  canvas.height = 256;
+
+  const ctx = canvas.getContext('2d');
+
+  const gradient = ctx.createLinearGradient(0, 0, 0, 256);
+
+  gradient.addColorStop(0, '#26345a');
+
+  gradient.addColorStop(0.55, '#4d668f');
+
+  gradient.addColorStop(0.8, '#d98a52');
+
+  gradient.addColorStop(1, '#3b4a63');
+
+  ctx.fillStyle = gradient;
+
+  ctx.fillRect(0, 0, 2, 256);
+
+  const texture = new THREE.CanvasTexture(canvas);
+
+  texture.colorSpace = THREE.SRGBColorSpace;
+
+  return texture;
+
+}
+
+
+const sky = new THREE.Mesh(
+
+  new THREE.SphereGeometry(80, 16, 16),
+
+  new THREE.MeshBasicMaterial({ map: createSkyTexture(), side: THREE.BackSide, fog: false, depthWrite: false })
+
+);
+
+camera.add(sky);
+
+scene.add(camera);
+
+
 // Luz de cielo/rebote: ilumina de forma pareja como luz ambiental "natural".
 
-const hemiLight = new THREE.HemisphereLight(0xbfd6ff, 0x2b3a2a, 1.1);
+const hemiLight = new THREE.HemisphereLight(0x6f88b3, 0x33432c, 1.1);
 
 scene.add(hemiLight);
 
 
 // Luz principal (sol): la que proyecta las sombras. Como el personaje avanza
 
-// de forma continua e ilimitada (ver GROUND_* y el seguimiento de cámara),
+// de forma continua e ilimitada (ver TILE_* y el seguimiento de cámara),
 
 // esta luz y su cámara de sombras deben seguirlo en animate(); si se dejara
 
@@ -89,7 +145,7 @@ scene.add(hemiLight);
 const LIGHT_OFFSET = new THREE.Vector3(5, 10, 6);
 
 
-const mainLight = new THREE.DirectionalLight(0xfff2df, 3.4);
+const mainLight = new THREE.DirectionalLight(0xffc98a, 3.2);
 
 mainLight.position.copy(LIGHT_OFFSET);
 
@@ -122,38 +178,581 @@ scene.add(mainLight.target);
 
 // opuesto al sol no quede completamente negro.
 
-const fillLight = new THREE.DirectionalLight(0x9fc4ff, 0.7);
+const fillLight = new THREE.DirectionalLight(0x7ea3d6, 0.65);
 
 fillLight.position.set(-6, 4, -4);
 
 scene.add(fillLight);
 
 
-const GROUND_SIZE = 20;
+// ---- Terreno infinito por "tiles" ----
 
-const GROUND_CELL = 1; // tamaño de celda del GridHelper (size / divisions)
+// En vez de recentrar todo el escenario bajo el personaje (lo que lo hacía
+
+// ver "pegado" al mundo, sin sensación real de avance), el suelo y sus
+
+// props viven en coordenadas absolutas repartidos en celdas de TILE_SIZE.
+
+// Solo se mantienen activas las 3x3 celdas alrededor del personaje: cuando
+
+// cruza a una celda nueva, la celda que quedó más atrás se recicla y
+
+// reaparece por delante con contenido nuevo. Así los árboles/rocas quedan
+
+// atrás de verdad al caminar, y el terreno nunca se acaba.
+
+const TILE_SIZE = 20;
+
+const TILE_SPAN = 1; // radio en celdas -> grilla de (2*TILE_SPAN+1)^2 = 3x3
 
 
 const groundGroup = new THREE.Group();
 
-
-const floor = new THREE.Mesh(
-
-  new THREE.PlaneGeometry(GROUND_SIZE, GROUND_SIZE),
-
-  new THREE.MeshStandardMaterial({ color: 0x263445, roughness: 0.9 })
-
-);
-
-floor.rotation.x = -Math.PI / 2;
-
-floor.receiveShadow = true;
-
-groundGroup.add(floor);
-
-groundGroup.add(new THREE.GridHelper(GROUND_SIZE, GROUND_SIZE, 0x7dd3fc, 0x475569));
-
 scene.add(groundGroup);
+
+
+// Textura de pasto generada por canvas (sin depender de imágenes externas):
+
+// base verde con moteado aleatorio para que no se vea plana.
+
+function createGrassTexture() {
+
+  const size = 256;
+
+  const canvas = document.createElement('canvas');
+
+  canvas.width = size;
+
+  canvas.height = size;
+
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#3f5c34';
+
+  ctx.fillRect(0, 0, size, size);
+
+  for (let i = 0; i < 2200; i++) {
+
+    const shade = Math.random();
+
+    const r = Math.floor(45 + shade * 30);
+
+    const g = Math.floor(70 + shade * 60);
+
+    const b = Math.floor(30 + shade * 20);
+
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.5)`;
+
+    const s = 1 + Math.random() * 2;
+
+    ctx.fillRect(Math.random() * size, Math.random() * size, s, s);
+
+  }
+
+  return canvas;
+
+}
+
+
+const groundTexture = new THREE.CanvasTexture(createGrassTexture());
+
+groundTexture.wrapS = THREE.RepeatWrapping;
+
+groundTexture.wrapT = THREE.RepeatWrapping;
+
+groundTexture.repeat.set(6, 6); // se repite igual en cada tile, así el patrón queda continuo entre celdas
+
+groundTexture.colorSpace = THREE.SRGBColorSpace;
+
+groundTexture.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+
+// Geometría y material del piso se comparten entre todas las celdas (más liviano).
+
+const floorGeometry = new THREE.PlaneGeometry(TILE_SIZE, TILE_SIZE);
+
+const floorMaterial = new THREE.MeshStandardMaterial({ map: groundTexture, roughness: 0.95 });
+
+
+// ---- Escenario rústico: props que pueblan cada celda del terreno ----
+
+
+const barkMaterial = new THREE.MeshStandardMaterial({ color: 0x5b4632, roughness: 0.95 });
+
+const foliageMaterials = [
+
+  new THREE.MeshStandardMaterial({ color: 0x3f6b34, roughness: 0.85, flatShading: true }),
+
+  new THREE.MeshStandardMaterial({ color: 0x4c7a3d, roughness: 0.85, flatShading: true })
+
+];
+
+const rockMaterial = new THREE.MeshStandardMaterial({ color: 0x7c7c74, roughness: 0.95, flatShading: true });
+
+const woodMaterial = new THREE.MeshStandardMaterial({ color: 0x8a6a45, roughness: 0.85 });
+
+const flowerMaterials = [
+
+  new THREE.MeshStandardMaterial({ color: 0xffe27a, roughness: 0.6 }),
+
+  new THREE.MeshStandardMaterial({ color: 0xff9ecf, roughness: 0.6 }),
+
+  new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 })
+
+];
+
+
+function withShadow(mesh) {
+
+  mesh.castShadow = true;
+
+  mesh.receiveShadow = true;
+
+  return mesh;
+
+}
+
+
+function createTree(x, z) {
+
+  const group = new THREE.Group();
+
+  const scale = 0.85 + Math.random() * 0.4;
+
+  const trunkHeight = 1.3 * scale;
+
+  const trunk = withShadow(new THREE.Mesh(
+
+    new THREE.CylinderGeometry(0.07 * scale, 0.12 * scale, trunkHeight, 6),
+
+    barkMaterial
+
+  ));
+
+  trunk.position.y = trunkHeight / 2;
+
+  group.add(trunk);
+
+
+  const foliageMat = foliageMaterials[Math.floor(Math.random() * foliageMaterials.length)];
+
+  for (let i = 0; i < 3; i++) {
+
+    const r = (0.95 - i * 0.22) * scale;
+
+    const h = 1.05 * scale;
+
+    const cone = withShadow(new THREE.Mesh(new THREE.ConeGeometry(r, h, 7), foliageMat));
+
+    cone.position.y = trunkHeight + i * 0.5 * scale + h * 0.35;
+
+    group.add(cone);
+
+  }
+
+
+  group.position.set(x, 0, z);
+
+  group.rotation.y = Math.random() * Math.PI * 2;
+
+  return group;
+
+}
+
+
+function createRock(x, z) {
+
+  const scale = 0.5 + Math.random() * 0.6;
+
+  const geo = new THREE.IcosahedronGeometry(0.3 * scale, 0);
+
+  const pos = geo.attributes.position;
+
+  for (let i = 0; i < pos.count; i++) {
+
+    const jitter = 0.8 + Math.random() * 0.35;
+
+    pos.setXYZ(i, pos.getX(i) * jitter, pos.getY(i) * jitter, pos.getZ(i) * jitter);
+
+  }
+
+  geo.computeVertexNormals();
+
+  const rock = withShadow(new THREE.Mesh(geo, rockMaterial));
+
+  rock.position.set(x, 0.15 * scale, z);
+
+  rock.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+
+  return rock;
+
+}
+
+
+function createBush(x, z) {
+
+  const group = new THREE.Group();
+
+  const scale = 0.6 + Math.random() * 0.4;
+
+  const mat = foliageMaterials[Math.floor(Math.random() * foliageMaterials.length)];
+
+  for (let i = 0; i < 4; i++) {
+
+    const s = withShadow(new THREE.Mesh(new THREE.SphereGeometry(0.26 * scale, 7, 6), mat));
+
+    s.position.set(
+
+      (Math.random() - 0.5) * 0.3 * scale,
+
+      0.2 * scale + Math.random() * 0.1,
+
+      (Math.random() - 0.5) * 0.3 * scale
+
+    );
+
+    group.add(s);
+
+  }
+
+  group.position.set(x, 0, z);
+
+  return group;
+
+}
+
+
+function createFlower(x, z) {
+
+  const mat = flowerMaterials[Math.floor(Math.random() * flowerMaterials.length)];
+
+  const group = new THREE.Group();
+
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.01, 0.01, 0.12, 4), foliageMaterials[0]);
+
+  stem.position.y = 0.06;
+
+  group.add(stem);
+
+  const bloom = new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 5), mat);
+
+  bloom.position.y = 0.12;
+
+  group.add(bloom);
+
+  group.position.set(x, 0, z);
+
+  return group;
+
+}
+
+
+function createHill(x, z, radius, color) {
+
+  const hill = new THREE.Mesh(
+
+    new THREE.SphereGeometry(radius, 14, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+
+    new THREE.MeshStandardMaterial({ color, roughness: 1, flatShading: true })
+
+  );
+
+  hill.position.set(x, -radius * 0.55, z);
+
+  return hill;
+
+}
+
+
+// Zona despejada alrededor del punto de aparición del personaje (0,0), para
+
+// que el pueblo (ver más abajo) no quede tapado por árboles encima.
+
+const CLEAR_RADIUS = 3.2;
+
+
+// Los árboles/rocas/arbustos se generan con geometría única por instancia
+
+// (varían de tamaño). Al reciclar una celda hay que liberarla explícitamente
+
+// o se acumula en la GPU con cada celda nueva durante una sesión larga.
+
+// El material sí se comparte entre instancias, así que no se libera aquí.
+
+function disposeTileContents(group) {
+
+  group.traverse((obj) => {
+
+    if (obj.isMesh && obj.geometry && obj.geometry !== floorGeometry) {
+
+      obj.geometry.dispose();
+
+    }
+
+  });
+
+  group.clear();
+
+}
+
+
+// Genera el contenido (piso + vegetación) de una celda del terreno. Cada vez
+
+// que una celda se recicla se vuelve a llamar con sus nuevas coordenadas,
+
+// así que el contenido de cada celda es aleatorio (no persiste si el
+
+// personaje se aleja mucho y vuelve, igual que ocurre en muchos mundos
+
+// generados proceduralmente).
+
+function populateTile(group, tx, tz) {
+
+  const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+
+  floor.rotation.x = -Math.PI / 2;
+
+  floor.receiveShadow = true;
+
+  group.add(floor);
+
+
+  const isHomeTile = tx === 0 && tz === 0;
+
+
+  const scatter = (count, factory) => {
+
+    for (let i = 0; i < count; i++) {
+
+      const x = (Math.random() - 0.5) * TILE_SIZE * 0.9;
+
+      const z = (Math.random() - 0.5) * TILE_SIZE * 0.9;
+
+      if (isHomeTile && Math.hypot(x, z) < CLEAR_RADIUS) continue; // deja libre el claro del pueblo
+
+      group.add(factory(x, z));
+
+    }
+
+  };
+
+
+  scatter(3, createTree);
+
+  scatter(2, createRock);
+
+  scatter(2, createBush);
+
+  scatter(4, createFlower);
+
+}
+
+
+// Pool fijo de 3x3 celdas activas alrededor del personaje. Se reciclan (se
+
+// reposicionan y regeneran) en vez de crearse/destruirse constantemente.
+
+const activeTiles = new Map();
+
+const tileKey = (tx, tz) => `${tx},${tz}`;
+
+
+for (let tx = -TILE_SPAN; tx <= TILE_SPAN; tx++) {
+
+  for (let tz = -TILE_SPAN; tz <= TILE_SPAN; tz++) {
+
+    const group = new THREE.Group();
+
+    group.position.set(tx * TILE_SIZE, 0, tz * TILE_SIZE);
+
+    populateTile(group, tx, tz);
+
+    groundGroup.add(group);
+
+    activeTiles.set(tileKey(tx, tz), { group, tx, tz });
+
+  }
+
+}
+
+
+let currentTileX = 0;
+
+let currentTileZ = 0;
+
+
+function updateActiveTiles(charTileX, charTileZ) {
+
+  const desired = new Set();
+
+  for (let dx = -TILE_SPAN; dx <= TILE_SPAN; dx++) {
+
+    for (let dz = -TILE_SPAN; dz <= TILE_SPAN; dz++) {
+
+      desired.add(tileKey(charTileX + dx, charTileZ + dz));
+
+    }
+
+  }
+
+
+  const freed = [];
+
+  activeTiles.forEach((entry, key) => {
+
+    if (!desired.has(key)) freed.push(entry);
+
+  });
+
+  freed.forEach((entry) => activeTiles.delete(tileKey(entry.tx, entry.tz)));
+
+
+  const missing = [];
+
+  desired.forEach((key) => { if (!activeTiles.has(key)) missing.push(key); });
+
+
+  missing.forEach((key, i) => {
+
+    const [tx, tz] = key.split(',').map(Number);
+
+    const entry = freed[i];
+
+    entry.tx = tx;
+
+    entry.tz = tz;
+
+    entry.group.position.set(tx * TILE_SIZE, 0, tz * TILE_SIZE);
+
+    disposeTileContents(entry.group);
+
+    populateTile(entry.group, tx, tz);
+
+    activeTiles.set(key, entry);
+
+  });
+
+}
+
+
+// ---- Pueblo de origen: punto fijo del mapa (no viaja con el personaje) ----
+
+const villageGroup = new THREE.Group();
+
+const FENCE_RADIUS = 9.6;
+
+const FENCE_SEGMENTS = 14;
+
+const LANTERN_EVERY = 4;
+
+const fencePosts = [];
+
+for (let i = 0; i < FENCE_SEGMENTS; i++) {
+
+  const angle = (i / FENCE_SEGMENTS) * Math.PI * 2;
+
+  fencePosts.push(new THREE.Vector3(Math.cos(angle) * FENCE_RADIUS, 0, Math.sin(angle) * FENCE_RADIUS));
+
+}
+
+
+fencePosts.forEach((p, i) => {
+
+  const post = withShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.06, 0.75, 6), woodMaterial));
+
+  post.position.set(p.x, 0.375, p.z);
+
+  villageGroup.add(post);
+
+
+  if (i % LANTERN_EVERY === 0) {
+
+    const pole = withShadow(new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.2, 6), barkMaterial));
+
+    pole.position.set(p.x, 0.7, p.z);
+
+    villageGroup.add(pole);
+
+
+    const glow = new THREE.Mesh(
+
+      new THREE.SphereGeometry(0.09, 8, 8),
+
+      new THREE.MeshStandardMaterial({ color: 0xffcf8a, emissive: 0xff9a3d, emissiveIntensity: 1.8, roughness: 0.4 })
+
+    );
+
+    glow.position.set(p.x, 1.4, p.z);
+
+    villageGroup.add(glow);
+
+
+    const lantern = new THREE.PointLight(0xffb066, 1.1, 5, 2);
+
+    lantern.position.set(p.x, 1.4, p.z);
+
+    villageGroup.add(lantern);
+
+  }
+
+});
+
+
+for (let i = 0; i < FENCE_SEGMENTS; i++) {
+
+  const a = fencePosts[i];
+
+  const b = fencePosts[(i + 1) % FENCE_SEGMENTS];
+
+  const dist = a.distanceTo(b);
+
+  [0.55, 0.28].forEach((railHeight) => {
+
+    const rail = withShadow(new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, dist * 0.92), woodMaterial));
+
+    rail.position.set((a.x + b.x) / 2, railHeight, (a.z + b.z) / 2);
+
+    rail.lookAt(b.x, railHeight, b.z);
+
+    villageGroup.add(rail);
+
+  });
+
+}
+
+
+scene.add(villageGroup);
+
+
+// ---- Colinas lejanas: dan profundidad al horizonte y siguen al personaje
+
+// (a esa distancia el paralaje real es imperceptible, así que no hace falta
+
+// que sean parte del terreno por tiles; es el mismo truco que usamos con el
+
+// cielo y con la luz principal). ----
+
+const HILL_COLORS = [0x4d6a4c, 0x5c7566, 0x74889b, 0x8fa0b8];
+
+const HILL_COUNT = 10;
+
+const hillsGroup = new THREE.Group();
+
+for (let i = 0; i < HILL_COUNT; i++) {
+
+  const angle = (i / HILL_COUNT) * Math.PI * 2 + Math.random() * 0.2;
+
+  const dist = 13 + Math.random() * 6;
+
+  const radius = 3 + Math.random() * 3;
+
+  const color = HILL_COLORS[Math.floor(Math.random() * HILL_COLORS.length)];
+
+  hillsGroup.add(createHill(Math.cos(angle) * dist, Math.sin(angle) * dist, radius, color));
+
+}
+
+scene.add(hillsGroup);
 
 
 const loader = new FBXLoader();
@@ -446,19 +1045,32 @@ function animate() {
     }
 
 
-    // El plano/grid se recentra bajo el personaje (ajustado a la celda del grid)
+    // Recicla las celdas de terreno que quedaron atrás hacia el frente del
 
-    // para dar la ilusión de un suelo infinito sin que el personaje salga de él.
+    // personaje solo cuando cruza a una celda nueva (no en cada frame), así
 
-    groundGroup.position.set(
+    // el suelo es infinito sin que nada se sienta "pegado" al personaje.
 
-      Math.round(model.position.x / GROUND_CELL) * GROUND_CELL,
+    const charTileX = Math.round(model.position.x / TILE_SIZE);
 
-      0,
+    const charTileZ = Math.round(model.position.z / TILE_SIZE);
 
-      Math.round(model.position.z / GROUND_CELL) * GROUND_CELL
+    if (charTileX !== currentTileX || charTileZ !== currentTileZ) {
 
-    );
+      updateActiveTiles(charTileX, charTileZ);
+
+      currentTileX = charTileX;
+
+      currentTileZ = charTileZ;
+
+    }
+
+
+    // Las colinas lejanas sí siguen al personaje en cada frame: a esa
+
+    // distancia el paralaje real es imperceptible (igual que un horizonte).
+
+    hillsGroup.position.set(model.position.x, 0, model.position.z);
 
 
     // La cámara sigue al personaje conservando el ángulo/zoom elegido con el mouse.
